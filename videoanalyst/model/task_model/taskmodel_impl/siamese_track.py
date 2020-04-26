@@ -42,6 +42,25 @@ class SiamTrack(ModuleBase):
         self.head = head
         self.loss = loss
 
+    def update(self, im_z, search_img):
+        # self.target_img.require_grad = True
+        f_z = self.basemodel(im_z)
+        # template as kernel
+        c_z_k = self.c_z_k(f_z)
+        r_z_k = self.r_z_k(f_z)
+        # backbone feature
+        f_x = self.basemodel(search_img)
+        # feature adjustment
+        c_x = self.c_x(f_x)
+        r_x = self.r_x(f_x)
+        # feature matching
+        r_out = xcorr_depthwise(r_x, r_z_k)
+        c_out = xcorr_depthwise(c_x, c_z_k)
+        # head
+        fcos_cls_score_final, fcos_ctr_score_final, fcos_bbox_final, corr_fea = self.head(
+            c_out, r_out)
+        return fcos_cls_score_final, fcos_ctr_score_final, fcos_bbox_final
+
     def forward(self, *args, phase="train"):
         r"""
         Perform tracking process for different phases (e.g. train / init / track)

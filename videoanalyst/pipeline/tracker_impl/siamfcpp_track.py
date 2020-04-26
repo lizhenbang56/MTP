@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*
-
 import numpy as np
 from copy import deepcopy
 from loguru import logger
@@ -11,6 +10,210 @@ from videoanalyst.pipeline.utils import (cxywh2xywh, get_crop,
                                          get_subwindow_tracking,
                                          imarray_to_tensor, tensor_to_numpy,
                                          xywh2cxywh, xyxy2cxywh)
+from videoanalyst.model.module_base import ModuleBase
+from videoanalyst.model.loss.loss_impl.utils import SafeLog
+
+
+class IOULoss(ModuleBase):
+
+    default_hyper_params = dict(
+        name="iou_loss",
+        background=0,
+        ignore_label=-1,
+        weight=1.0,
+    )
+
+    def __init__(self, background=0, ignore_label=-1):
+        super().__init__()
+        self.safelog = SafeLog()
+        self.register_buffer("t_one", torch.tensor(1., requires_grad=False))
+        self.register_buffer("t_zero", torch.tensor(0., requires_grad=False))
+        self.update_params()
+
+    def update_params(self):
+        self.background = self._hyper_params["background"]
+        self.ignore_label = self._hyper_params["ignore_label"]
+        self.weight = self._hyper_params["weight"]
+
+    def forward(self, pred_data, target_data, cls_gt):
+        pred = pred_data
+        gt = target_data
+        mask = ((~(cls_gt == self.background)) *
+                (~(cls_gt == self.ignore_label))).detach()
+        mask = mask.type(torch.Tensor).squeeze(2).to(pred.device)
+
+        aog = torch.abs(gt[:, :, 2] - gt[:, :, 0] +
+                        1) * torch.abs(gt[:, :, 3] - gt[:, :, 1] + 1)
+        aop = torch.abs(pred[:, :, 2] - pred[:, :, 0] +
+                        1) * torch.abs(pred[:, :, 3] - pred[:, :, 1] + 1)
+
+        iw = torch.min(pred[:, :, 2], gt[:, :, 2]) - torch.max(
+            pred[:, :, 0], gt[:, :, 0]) + 1
+        ih = torch.min(pred[:, :, 3], gt[:, :, 3]) - torch.max(
+            pred[:, :, 1], gt[:, :, 1]) + 1
+        inter = torch.max(iw, self.t_zero) * torch.max(ih, self.t_zero)
+
+        union = aog + aop - inter
+        iou = torch.max(inter / union, self.t_zero)
+        loss = -self.safelog(iou)
+
+        loss = (loss * mask).sum() / torch.max(
+            mask.sum(), self.t_one) * self._hyper_params["weight"]
+        iou = iou.detach()
+        iou = (iou * mask).sum() / torch.max(mask.sum(), self.t_one)
+        extra = dict(iou=iou)
+
+        return loss, extra
+
+
+class SigmoidCrossEntropyCenterness(ModuleBase):
+
+    default_hyper_params = dict(
+        name="centerness",
+        background=0,
+        ignore_label=-1,
+        weight=1.0,
+    )
+
+    def __init__(self, background=0, ignore_label=-1):
+        super(SigmoidCrossEntropyCenterness, self).__init__()
+        self.safelog = SafeLog()
+        self.register_buffer("t_one", torch.tensor(1., requires_grad=False))
+        self.update_params()
+
+    def update_params(self, ):
+        self.background = self._hyper_params["background"]
+        self.ignore_label = self._hyper_params["ignore_label"]
+        self.weight = self._hyper_params["weight"]
+
+    def forward(self, pred_data, target_data):
+        r"""
+        Center-ness loss
+        Computation technique originated from this implementation:
+            https://www.tensorflow.org/api_docs/python/tf/nn/sigmoid_cross_entropy_with_logits
+
+        Arguments
+        ---------
+        pred: torch.Tensor
+            center-ness logits (BEFORE Sigmoid)
+            format: (B, HW)
+        label: torch.Tensor
+            training label
+            format: (B, HW)
+
+        Returns
+        -------
+        torch.Tensor
+            scalar loss
+            format: (,)
+        """
+        pred = pred_data
+        label = target_data
+        mask = (~(label == self.background)).type(torch.Tensor).to(pred.device)
+        not_neg_mask = (pred >= 0).type(torch.Tensor).to(pred.device)
+        loss = (pred * not_neg_mask - pred * label +
+                self.safelog(1. + torch.exp(-torch.abs(pred)))) * mask
+        loss_residual = (-label * self.safelog(label) -
+                         (1 - label) * self.safelog(1 - label)
+                         ) * mask  # suppress loss residual (original vers.)
+        loss = loss - loss_residual.detach()
+
+        loss = loss.sum() / torch.max(mask.sum(),
+                                      self.t_one) * self._hyper_params["weight"]
+        extra = dict()
+
+        return loss, extra
+
+
+class SigmoidCrossEntropyRetina(ModuleBase):
+
+    default_hyper_params = dict(
+        name="focal_ce",
+        background=0,
+        ignore_label=-1,
+        weight=1.0,
+        alpha=0.5,
+        gamma=0.0,
+    )
+
+    def __init__(self, ):
+        super(SigmoidCrossEntropyRetina, self).__init__()
+        self.safelog = SafeLog()
+        self.register_buffer("t_one", torch.tensor(1., requires_grad=False))
+        self.update_params()
+
+    def update_params(self, ):
+        self.background = self._hyper_params["background"]
+        self.ignore_label = self._hyper_params["ignore_label"]
+        self.weight = self._hyper_params["weight"]
+        # focal loss coefficients
+        self.register_buffer(
+            "alpha",
+            torch.tensor(float(self._hyper_params["alpha"]),
+                         requires_grad=False))
+        self.register_buffer(
+            "gamma",
+            torch.tensor(float(self._hyper_params["gamma"]),
+                         requires_grad=False))
+
+    def forward(self, pred, label):
+        r"""
+        Focal loss
+        :param pred: shape=(B, HW, C), classification logits (BEFORE Sigmoid)
+        :param label: shape=(B, HW)
+        """
+        r"""
+        Focal loss
+        Arguments
+        ---------
+        pred: torch.Tensor
+            classification logits (BEFORE Sigmoid)
+            format: (B, HW)
+        label: torch.Tensor
+            training label
+            format: (B, HW)
+
+        Returns
+        -------
+        torch.Tensor
+            scalar loss
+            format: (,)
+        """
+        mask = ~(label == self.ignore_label)
+        mask = mask.type(torch.Tensor).to(label.device)
+        vlabel = label * mask
+        zero_mat = torch.zeros(pred.shape[0], pred.shape[1], pred.shape[2] + 1)
+
+        one_mat = torch.ones(pred.shape[0], pred.shape[1], pred.shape[2] + 1)
+        index_mat = vlabel.type(torch.LongTensor)
+
+        onehot_ = zero_mat.scatter(2, index_mat, one_mat)
+        onehot = onehot_[:, :, 1:].type(torch.Tensor).to(pred.device)
+
+        pred = torch.sigmoid(pred)
+        pos_part = (1 - pred)**self.gamma * onehot * self.safelog(pred)
+        neg_part = pred**self.gamma * (1 - onehot) * self.safelog(1 - pred)
+        loss = -(self.alpha * pos_part +
+                 (1 - self.alpha) * neg_part).sum(dim=2) * mask.squeeze(2)
+
+        positive_mask = (label > 0).type(torch.Tensor).to(pred.device)
+
+        loss = loss.sum() / torch.max(positive_mask.sum(),
+                                      self.t_one) * self._hyper_params["weight"]
+        extra = dict()
+
+        return loss, extra
+
+
+def fgsm_attack(image, epsilon, data_grad):
+    # Collect the element-wise sign of the data gradient
+    sign_data_grad = data_grad.sign()
+    # Create the perturbed image by adjusting each pixel of the input image
+    perturbed_image = image - epsilon*sign_data_grad
+    # Adding clipping to maintain [0,1] range
+    perturbed_image = torch.clamp(perturbed_image, 0, 255)
+    # Return the perturbed image
+    return perturbed_image
 
 
 # ============================== Tracker definition ============================== #
@@ -83,6 +286,9 @@ class SiamFCppTracker(PipelineBase):
         # set underlying model to device
         self.device = torch.device("cpu")
         self.debug = False
+        self.loss1 = SigmoidCrossEntropyRetina()
+        self.loss2 = SigmoidCrossEntropyCenterness()
+        self.loss3 = IOULoss()
         self.set_model(self._model)
 
     def set_model(self, model):
@@ -99,6 +305,9 @@ class SiamFCppTracker(PipelineBase):
     def set_device(self, device):
         self.device = device
         self._model = self._model.to(device)
+        self.loss1 = self.loss1.to(self.device)
+        self.loss2 = self.loss2.to(self.device)
+        self.loss3 = self.loss3.to(self.device)
 
     def update_params(self):
         hps = self._hyper_params
@@ -133,9 +342,10 @@ class SiamFCppTracker(PipelineBase):
             avg_chans = np.mean(im, axis=(0, 1))
 
         z_size = self._hyper_params['z_size']
+        x_size = self._hyper_params['x_size']
         context_amount = self._hyper_params['context_amount']
 
-        im_z_crop, _ = get_crop(
+        im_z_crop, _, _ = get_crop(
             im,
             target_pos,
             target_sz,
@@ -143,11 +353,57 @@ class SiamFCppTracker(PipelineBase):
             avg_chans=avg_chans,
             context_amount=context_amount,
             func_get_subwindow=get_subwindow_tracking,
+            params=self._hyper_params
         )
+        im_x_crop, scale_x, label = get_crop(
+            im,
+            target_pos,
+            target_sz,
+            z_size,
+            x_size=x_size,
+            avg_chans=avg_chans,
+            context_amount=context_amount,
+            func_get_subwindow=get_subwindow_tracking,
+            params=self._hyper_params
+        )
+
+        label, ctr_res_final, gt_boxes_res_final = label
+
         phase = self._hyper_params['phase_init']
+
+        loop_num = 2
+        im_z = imarray_to_tensor(im_z_crop).to(self.device)
+        for i in range(loop_num):
+            im_z.requires_grad = True
+            score, ctr, reg = self._model.update(im_z, imarray_to_tensor(im_x_crop).to(self.device))
+            if i == 0:
+                feat_len = score.shape[1]
+                label_raw = label.reshape(1, feat_len, 1)
+                label = torch.from_numpy(label_raw).to(self.device)
+                ctr_res_final = ctr_res_final.reshape(1, feat_len, 1)
+                ctr_res_final = torch.from_numpy(ctr_res_final).to(self.device)
+                gt_boxes_res_final = torch.from_numpy(gt_boxes_res_final).to(self.device)
+                gt_boxes_res_final = gt_boxes_res_final.unsqueeze(0)
+            loss1, _ = self.loss1(score, label)
+            loss2, _ = self.loss2(ctr, ctr_res_final)
+            loss3, _ = self.loss3(reg, gt_boxes_res_final, label)
+            loss = loss1 + loss2 + loss3
+            print(loss.item())
+            self._model.zero_grad()
+
+            # Calculate gradients of model in backward pass
+            loss.backward()
+
+            # Collect datagrad
+            data_grad = im_z.grad.data
+
+            # Call FGSM Attack
+            perturbed_data = fgsm_attack(im_z, 0.05, data_grad)
+            im_z = perturbed_data.data
+
+        '''重新初始化'''
         with torch.no_grad():
-            data = imarray_to_tensor(im_z_crop).to(self.device)
-            features = self._model(data, phase=phase)
+            features = self._model(im_z, phase=phase)
 
         return features, im_z_crop, avg_chans
 
@@ -205,7 +461,7 @@ class SiamFCppTracker(PipelineBase):
         x_size = self._hyper_params['x_size']
         context_amount = self._hyper_params['context_amount']
         phase_track = self._hyper_params['phase_track']
-        im_x_crop, scale_x = get_crop(
+        im_x_crop, scale_x, _ = get_crop(
             im_x,
             target_pos,
             target_sz,

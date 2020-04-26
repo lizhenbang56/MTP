@@ -105,6 +105,7 @@ def get_subwindow_tracking(im,
     return im_patch
 
 
+from videoanalyst.data.target.target_impl.utils import make_densebox_target
 def get_crop(im,
              target_pos,
              target_sz,
@@ -114,7 +115,8 @@ def get_crop(im,
              context_amount=0.5,
              func_get_subwindow=get_subwindow_tracking,
              output_size=None,
-             mask=None):
+             mask=None,
+             params=None):
     r"""
     Get cropped patch for tracking
 
@@ -158,6 +160,16 @@ def get_crop(im,
 
     if output_size is None:
         output_size = x_size
+
+    '''得到裁剪后的边框'''
+    box_x = np.array([(x_size - 1) / 2] * 2 + [0] * 2) + np.concatenate(
+        [np.array([0, 0]), np.array(target_sz)]) * scale
+    bbox_x = cxywh2xyxy(box_x)
+    if params is not None:
+        label = make_densebox_target(np.expand_dims(bbox_x, axis=0), params)
+    else:
+        label = None
+
     if mask is not None:
         im_crop, mask_crop = func_get_subwindow(im,
                                                 target_pos,
@@ -169,7 +181,7 @@ def get_crop(im,
     else:
         im_crop = func_get_subwindow(im, target_pos, output_size, round(s_crop),
                                      avg_chans)
-        return im_crop, scale
+        return im_crop, scale, label
 
 
 def _make_valid_int_pair(sz) -> Tuple[int, int]:
