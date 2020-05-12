@@ -20,6 +20,7 @@ def make_parser():
                         default='',
                         type=str,
                         help='experiment configuration')
+    parser.add_argument('--list_file', default='')
 
     return parser
 
@@ -72,4 +73,8 @@ if __name__ == '__main__':
     elif task == 'vos':
         testers = build_sat_tester(task_cfg)
     for tester in testers:
-        tester.test()
+        list_file = parsed_args.list_file
+        if len(list_file) == 0:
+            tester.test()
+        else:
+            tester.test(list_file)

@@ -46,7 +46,7 @@ class GOT10kTester(TesterBase):
             all_devs = [torch.device("cpu")]
         self._state["all_devs"] = all_devs
 
-    def test(self, ):
+    def test(self, list_file=None):
         tracker_name = self._hyper_params["exp_name"]
         all_devs = self._state["all_devs"]
         dev = all_devs[0]
@@ -64,7 +64,8 @@ class GOT10kTester(TesterBase):
             experiment = ExperimentGOT10k(root_dir,
                                           subset=subset,
                                           result_dir=result_dir,
-                                          report_dir=report_dir)
+                                          report_dir=report_dir,
+                                          list_file=list_file)
             experiment.run(pipeline_tracker, overwrite_result=True)
             performance = experiment.report([tracker_name], plot_curves=False)
         test_result_dict = dict()

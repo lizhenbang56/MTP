@@ -8,6 +8,7 @@ import numpy as np
 
 from videoanalyst.evaluation.got_benchmark.utils.viz import show_frame
 from videoanalyst.pipeline.pipeline_base import PipelineBase
+from videoanalyst.pipeline.utils.visualize import vis
 
 
 class PipelineTracker(object):
@@ -92,6 +93,15 @@ class PipelineTracker(object):
                 self.init(image, box)
             else:
                 boxes[f, :] = self.update(image)
+                debug = False
+                if debug:
+                    print('debug')
+                    vis(img_file,
+                        self.pipeline._state['x_crop'],
+                        self.pipeline._state['score'],
+                        self.pipeline._state['cls'],
+                        self.pipeline._state['ctr'],
+                        self.pipeline._state['all_box'])
             times[f] = time.time() - start_time
 
             if visualize:
