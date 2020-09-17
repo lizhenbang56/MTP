@@ -319,7 +319,7 @@ class SiamFCppTracker(PipelineBase):
             (hps['score_size'] - 1) * hps['total_stride']) // 2
         self._hyper_params = hps
 
-    def feature(self, im: np.array, target_pos, target_sz, avg_chans=None):
+    def feature(self, im: np.array, target_pos, target_sz, avg_chans=None, loop=None):
         """Extract feature
 
         Parameters
@@ -371,7 +371,7 @@ class SiamFCppTracker(PipelineBase):
 
         phase = self._hyper_params['phase_init']
 
-        loop_num = 2
+        loop_num = loop
         im_z = imarray_to_tensor(im_z_crop).to(self.device)
         for i in range(loop_num):
             im_z.requires_grad = True
@@ -407,7 +407,7 @@ class SiamFCppTracker(PipelineBase):
 
         return features, im_z_crop, avg_chans
 
-    def init(self, im, state):
+    def init(self, im, state, loop=None):
         r"""
         Initialize tracker
             Internal target state representation: self._state['state'] = (target_pos, target_sz)
@@ -423,7 +423,7 @@ class SiamFCppTracker(PipelineBase):
         self._state['im_w'] = im.shape[1]
 
         # extract template feature
-        features, im_z_crop, avg_chans = self.feature(im, target_pos, target_sz)
+        features, im_z_crop, avg_chans = self.feature(im, target_pos, target_sz, loop=loop)
 
         score_size = self._hyper_params['score_size']
         if self._hyper_params['windowing'] == 'cosine':

@@ -5,10 +5,11 @@ from typing import List
 # from PIL import Image
 import cv2
 import numpy as np
-
+from PIL import Image
 from videoanalyst.evaluation.got_benchmark.utils.viz import show_frame
 from videoanalyst.pipeline.pipeline_base import PipelineBase
 from videoanalyst.pipeline.utils.visualize import vis
+from videoanalyst.utils.data_aug import blur, illum, change_box, pil_to_cv2
 
 
 class PipelineTracker(object):
@@ -31,7 +32,7 @@ class PipelineTracker(object):
         self.is_deterministic = is_deterministic
         self.pipeline = pipeline
 
-    def init(self, image: np.array, box):
+    def init(self, image: np.array, box, loop=None):
         """Initialize pipeline tracker
         
         Parameters
@@ -42,7 +43,7 @@ class PipelineTracker(object):
             tracking bbox on the first frame
             formate: (x, y, w, h)
         """
-        self.pipeline.init(image, box)
+        self.pipeline.init(image, box, loop)
 
     def update(self, image: np.array):
         """Perform tracking
@@ -60,7 +61,7 @@ class PipelineTracker(object):
         """
         return self.pipeline.update(image)
 
-    def track(self, img_files: List, box, visualize: bool = False):
+    def track(self, img_files: List, box, visualize: bool = False, noise=None, loop=None):
         """Perform tracking on a given video sequence
         
         Parameters
@@ -90,7 +91,8 @@ class PipelineTracker(object):
 
             start_time = time.time()
             if f == 0:
-                self.init(image, box)
+                image, box = self.input_aug(img_file, box, noise)
+                self.init(image, box, loop)
             else:
                 boxes[f, :] = self.update(image)
                 debug = False
@@ -108,3 +110,16 @@ class PipelineTracker(object):
                 show_frame(image, boxes[f, :])
 
         return boxes, times
+
+    def input_aug(self, image_path, box, noise):
+        blur_param, illum_param, box_param = noise['blur'], noise['illum'], noise['box']
+        image = Image.open(image_path)
+        image = illum(image, illum_param)
+        image = blur(image, blur_param)
+
+        '''START：pil 转 cv2'''
+        image = pil_to_cv2(image)
+        '''END：pil 转 cv2'''
+
+        box = change_box(box, box_param)
+        return image, box

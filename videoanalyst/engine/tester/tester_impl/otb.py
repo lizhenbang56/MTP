@@ -46,7 +46,7 @@ class OTBTester(TesterBase):
             all_devs = [torch.device("cpu")]
         self._state["all_devs"] = all_devs
 
-    def test(self, ):
+    def test(self, noise=None, loop=None):
         tracker_name = self._hyper_params["exp_name"]
         all_devs = self._state["all_devs"]
         dev = all_devs[0]
@@ -62,11 +62,14 @@ class OTBTester(TesterBase):
             report_dir = osp.join(save_root_dir, "report")
 
             experiment = ExperimentOTB(root_dir,
+                                       noise=noise,
+                                       loop=loop,
                                        version=subset,
                                        result_dir=result_dir,
                                        report_dir=report_dir)
             experiment.run(pipeline_tracker)
-            performance = experiment.report([tracker_name], plot_curves=False)
+            # performance = experiment.report([tracker_name], plot_curves=False)
+            performance = None
         test_result_dict = dict()
         if performance is not None:
             test_result_dict["main_performance"] = performance[tracker_name][

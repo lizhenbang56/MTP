@@ -10,6 +10,7 @@ from PIL import Image
 from ..datasets import OTB
 from ..utils.metrics import rect_iou, center_error
 from ..utils.viz import show_frame
+from videoanalyst.utils.data_aug import compute_iou, change_box
 
 
 class ExperimentOTB(object):
@@ -24,7 +25,7 @@ class ExperimentOTB(object):
         report_dir (string, optional): Directory for storing performance
             evaluation results. Default is ``./reports``.
     """
-    def __init__(self, root_dir, version=2015,
+    def __init__(self, root_dir, noise=None, loop=None, version=2015,
                  result_dir='results', report_dir='reports'):
         super(ExperimentOTB, self).__init__()
         self.dataset = OTB(root_dir, version, download=True)
@@ -35,6 +36,8 @@ class ExperimentOTB(object):
         # converges to the average overlap (AO)
         self.nbins_iou = 21
         self.nbins_ce = 51
+        self.noise = noise
+        self.loop = loop
 
     def run(self, tracker, visualize=False, overwrite_result=True):
         print('Running tracker %s on %s...' % (
@@ -46,15 +49,19 @@ class ExperimentOTB(object):
             print('--Sequence %d/%d: %s' % (s + 1, len(self.dataset), seq_name))
 
             # skip if results exist
+            box_iou = compute_iou([10, 20, 30, 40], change_box([10, 20, 30, 40], self.noise['box']))
             record_file = os.path.join(
-                self.result_dir, tracker.name, '%s.txt' % seq_name)
+                self.result_dir,
+                tracker.name+'_loop_{}_illum_{:.2}_blur_{:.2}_iou_{:.2}'.format(
+                    self.loop, self.noise['illum'], self.noise['blur'], box_iou),
+                '%s.txt' % seq_name)
             if os.path.exists(record_file) and not overwrite_result:
                 print('  Found results, skipping', seq_name)
                 continue
 
             # tracking loop
             boxes, times = tracker.track(
-                img_files, anno[0, :], visualize=visualize)
+                img_files, anno[0, :], visualize=visualize, noise=self.noise, loop=self.loop)
             assert len(boxes) == len(anno)
             
             # record results
